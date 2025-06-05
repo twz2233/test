@@ -98,7 +98,7 @@
       let scatterTrace = null; // Plotly trace for the scatter plot
 
       // 1. Load the CSV file using D3
-      d3.csv("/House/PropertyData_final_cleaned.csv").then((data) => {
+      d3.csv("/test/PropertyData_final_cleaned.csv").then((data) => {
         // Convert numeric fields from string to number, and assign a unique ID
         allData = data.map((d, i) => ({
           price: +d.price,
