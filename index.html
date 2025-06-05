@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Interactive Real Estate Visualization</title>
+
+    <!-- Leaflet CSS (for the map) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css" />
+
+    <style>
+      /* Basic CSS to place map and scatter side by side */
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+
+      #map {
+        width: 48%;
+        height: 600px;
+        float: left;
+        border: 1px solid #ccc;
+      }
+
+      #scatter {
+        width: 48%;
+        height: 600px;
+        float: right;
+        border: 1px solid #ccc;
+      }
+
+      #detail {
+        clear: both;
+        margin-top: 30px;
+      }
+
+      #detail h2 {
+        margin-bottom: 10px;
+      }
+
+      #detailTable {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      #detailTable th,
+      #detailTable td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        text-align: left;
+      }
+
+      #detailTable th {
+        background-color: #f2f2f2;
+        width: 200px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Interactive Real Estate Dashboard</h1>
+
+    <!-- 1. Map container -->
+    <div id="map"></div>
+
+    <!-- 2. Scatter plot container -->
+    <div id="scatter"></div>
+
+    <!-- 3. Detail table -->
+    <div id="detail">
+      <h2>Property Details</h2>
+      <table id="detailTable">
+        <!-- JavaScript will inject table rows here -->
+      </table>
+    </div>
+
+    <!-- D3.js (for reading CSV) -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Leaflet JS (for the map) -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Plotly.js (for the scatter plot) -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+
+    <!-- Custom JavaScript -->
+    <script>
+      // script.js
+
+      // Global variables to hold data and map/scatter objects
+      let allData = []; // Array of all property objects read from CSV
+      let mapMarkers = []; // Array to store Leaflet marker objects
+      let scatterTrace = null; // Plotly trace for the scatter plot
+
+      // 1. Load the CSV file using D3
+      d3.csv("/House/PropertyData_final_cleaned.csv").then((data) => {
+        // Convert numeric fields from string to number, and assign a unique ID
+        allData = data.map((d, i) => ({
+          price: +d.price,
+          bedrooms: +d.bedrooms,
+          size: +d.size,
+          url: d.url,
+          type: d.type,
+          streetAddress: d.streetAddress,
+          addressLocality: d.addressLocality,
+          addressRegion: d.addressRegion,
+          postalCode: d.postalCode,
+          county: d.county,
+          lat: +d.lat,
+          long: +d.long,
+          // Use the array index as a unique identifier (_id)
+          _id: i,
+        }));
+
+        // 2. Initialize the Leaflet map
+        initializeMap();
+
+        // 3. Initialize the Plotly scatter plot
+        initializeScatter();
+      });
+
+      // ———————————————————————————————————————————————————————————
+      // Function: initializeMap
+      // Purpose:  Create a Leaflet map, add markers for each property,
+      //           and set up click events to highlight on the scatter plot
+      // ———————————————————————————————————————————————————————————
+      function initializeMap() {
+        // 2.1 Create a Leaflet map centered around Davis (approximate coordinates)
+        const map = L.map("map").setView([38.5, -121.7], 9);
+
+        // 2.2 Add OpenStreetMap tile layer
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+        }).addTo(map);
+
+        // 2.3 Loop through allData and create a circle marker for each property
+        allData.forEach((d) => {
+          // Choose a color based on the number of bedrooms
+          const markerColor = getColorByBedrooms(d.bedrooms);
+
+          // Create a circle marker at the property’s latitude/longitude
+          const marker = L.circleMarker([d.lat, d.long], {
+            radius: 6,
+            color: markerColor,
+            fillOpacity: 0.7,
+          }).addTo(map);
+
+          // Prepare HTML content for the popup
+          const popupContent = `
+          <strong>Price:</strong> $${d3.format(",")(d.price)}<br/>
+          <strong>Size:</strong> ${d.size} sqft<br/>
+          <strong>Bedrooms:</strong> ${d.bedrooms}<br/>
+          <a href="${d.url}" target="_blank">View Listing</a>
+        `;
+          marker.bindPopup(popupContent);
+
+          // Attach our custom ID to the marker object
+          marker._customId = d._id;
+
+          // Add a click listener: when clicked, highlight the corresponding
+          // point in the scatter plot and fill in the detail table
+          marker.on("click", () => {
+            highlightInScatter(d._id);
+            fillDetailTable(d);
+          });
+
+          // Store the marker for later (e.g., to remove highlight)
+          mapMarkers.push(marker);
+        });
+      }
+
+      // ———————————————————————————————————————————————————————————
+      // Function: initializeScatter
+      // Purpose:  Create a Plotly scatter plot of size vs. price,
+      //           color-coded by bedrooms, and listen for click events
+      // ———————————————————————————————————————————————————————————
+      function initializeScatter() {
+        // 3.1 Prepare arrays for Plotly trace
+        const xValues = allData.map((d) => d.size);
+        const yValues = allData.map((d) => d.price);
+        const textValues = allData.map(
+          (d) => `
+          <a href="${d.url}" target="_blank">View Listing</a><br/>
+          County: ${d.county}<br/>
+          Address: ${d.streetAddress}, ${d.addressLocality}
+        `
+        );
+        const colorValues = allData.map((d) => getColorByBedrooms(d.bedrooms));
+        const customIds = allData.map((d) => d._id);
+
+        // 3.2 Define the Plotly trace
+        scatterTrace = {
+          x: xValues,
+          y: yValues,
+          text: textValues,
+          mode: "markers",
+          marker: {
+            color: colorValues,
+            size: 8,
+            line: { width: 0.5, color: "#333" },
+          },
+          customdata: customIds, // Store our _id in customdata for lookups
+          hoverinfo: "text",
+        };
+
+        // 3.3 Define layout
+        const layout = {
+          title: "Size (sqft) vs. Price (USD)",
+          xaxis: { title: "Size (square feet)" },
+          yaxis: { title: "Price (USD)" },
+          margin: { t: 50, r: 30, b: 50, l: 70 },
+        };
+
+        // 3.4 Render the scatter plot into the <div id="scatter">
+        Plotly.newPlot("scatter", [scatterTrace], layout);
+
+        // 3.5 Listen for clicks on scatter points
+        const scatterDiv = document.getElementById("scatter");
+        scatterDiv.on("plotly_click", (eventData) => {
+          if (eventData.points.length > 0) {
+            // Extract our custom _id from the clicked point
+            const clickedId = eventData.points[0].customdata;
+            // Highlight the corresponding marker on the map
+            highlightInMap(clickedId);
+            // Find the data object for that ID and fill the detail table
+            const clickedObj = allData.find((d) => d._id === clickedId);
+            fillDetailTable(clickedObj);
+          }
+        });
+      }
+
+      // ———————————————————————————————————————————————————————————
+      // Function: getColorByBedrooms
+      // Purpose:  Return a hex color string based on the number of bedrooms
+      // ———————————————————————————————————————————————————————————
+      function getColorByBedrooms(bedrooms) {
+        if (bedrooms <= 2) return "#1f78b4"; // Blue for ≤2 bedrooms
+        if (bedrooms <= 4) return "#33a02c"; // Green for 3–4 bedrooms
+        return "#e31a1c"; // Red for ≥5 bedrooms
+      }
+
+      // ———————————————————————————————————————————————————————————
+      // Function: highlightInScatter
+      // Purpose:  Given a property _id, update Plotly marker colors so that
+      //           the clicked point is highlighted, and others revert to default.
+      // ———————————————————————————————————————————————————————————
+      function highlightInScatter(id) {
+        // 4.1 Start by setting all points back to their default color
+        const defaultColors = allData.map((d) =>
+          getColorByBedrooms(d.bedrooms)
+        );
+
+        // 4.2 Find the index of the property with matching _id
+        const idx = allData.findIndex((d) => d._id === id);
+        if (idx >= 0) {
+          // Override that one point’s color to highlight it
+          defaultColors[idx] = "#ff7f00"; // Orange highlight
+        }
+
+        // 4.3 Use Plotly.restyle to update the 'marker.color' array
+        Plotly.restyle("scatter", { "marker.color": [defaultColors] });
+      }
+
+      // ———————————————————————————————————————————————————————————
+      // Function: highlightInMap
+      // Purpose:  Given a property _id, reset all markers to default style,
+      //           then find the matching marker and apply highlight style.
+      // ———————————————————————————————————————————————————————————
+      function highlightInMap(id) {
+        // 5.1 Reset all markers to default style
+        mapMarkers.forEach((marker) => {
+          // Look up the number of bedrooms for this marker’s _id
+          const bedroomsCount = allData.find(
+            (d) => d._id === marker._customId
+          ).bedrooms;
+          marker.setStyle({
+            radius: 6,
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.7,
+            color: getColorByBedrooms(bedroomsCount),
+          });
+        });
+
+        // 5.2 Find the marker with matching _id
+        const targetMarker = mapMarkers.find((m) => m._customId === id);
+        if (targetMarker) {
+          // Apply highlight style
+          targetMarker.setStyle({
+            radius: 10,
+            weight: 2,
+            color: "#ff7f00", // Orange outline
+            fillColor: "#ffff33", // Bright yellow fill
+            fillOpacity: 1,
+          });
+          // Open its popup as well
+          targetMarker.openPopup();
+        }
+      }
+
+      // ———————————————————————————————————————————————————————————
+      // Function: fillDetailTable
+      // Purpose:  Populate the detail table at the bottom with all relevant fields
+      //           from the clicked property object.
+      // ———————————————————————————————————————————————————————————
+      function fillDetailTable(d) {
+        const table = document.getElementById("detailTable");
+        // 6.1 Clear any existing rows
+        table.innerHTML = "";
+
+        // 6.2 Define which fields to show in the detail table and their labels
+        const fieldsToShow = [
+          { label: "Price (USD)", key: "price" },
+          { label: "Bedrooms", key: "bedrooms" },
+          { label: "Size (sqft)", key: "size" },
+          { label: "Property Type", key: "type" },
+          { label: "Street Address", key: "streetAddress" },
+          { label: "City / Locality", key: "addressLocality" },
+          { label: "Region / State", key: "addressRegion" },
+          { label: "Postal Code", key: "postalCode" },
+          { label: "County", key: "county" },
+          { label: "View Listing", key: "url", isLink: true },
+        ];
+
+        // 6.3 For each field, create a table row with a header cell (th) and data cell (td)
+        fieldsToShow.forEach((f) => {
+          const tr = document.createElement("tr");
+
+          const th = document.createElement("th");
+          th.textContent = f.label;
+
+          const td = document.createElement("td");
+          if (f.isLink) {
+            // If it’s a link field, create an <a> element
+            const a = document.createElement("a");
+            a.href = d[f.key];
+            a.target = "_blank";
+            a.textContent = "Click here";
+            td.appendChild(a);
+          } else {
+            td.textContent = d[f.key];
+          }
+
+          tr.appendChild(th);
+          tr.appendChild(td);
+          table.appendChild(tr);
+        });
+      }
+    </script>
+  </body>
+</html>
